@@ -298,7 +298,7 @@ namespace libtorrent
 			storage_impl, dummy, const_cast<file_storage*>(&t.files()));
 
 		settings_pack sett;
-		sett.set_int(settings_pack::cache_size, 0);
+		enable_disk_cache(sett, false);
 		sett.set_int(settings_pack::aio_threads, 2);
 
 		// TODO: this should probably be optional

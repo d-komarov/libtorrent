@@ -165,10 +165,7 @@ namespace {
 		set.set_int(settings_pack::send_buffer_watermark, 9);
 
 		// don't use any disk cache
-		set.set_int(settings_pack::cache_size, 0);
-		set.set_int(settings_pack::cache_buffer_chunk_size, 1);
-		set.set_bool(settings_pack::use_read_cache, false);
-		set.set_bool(settings_pack::use_disk_read_ahead, false);
+		enable_disk_cache(set, false);
 
 		set.set_bool(settings_pack::close_redundant_connections, true);
 
@@ -229,9 +226,8 @@ namespace {
 		set.set_int(settings_pack::dht_upload_rate_limit, 20000);
 
 		// use 1 GB of cache
+		enable_disk_cache(set, true);
 		set.set_int(settings_pack::cache_size, 32768 * 2);
-		set.set_bool(settings_pack::use_read_cache, true);
-		set.set_int(settings_pack::cache_buffer_chunk_size, 0);
 		set.set_int(settings_pack::read_cache_line_size, 32);
 		set.set_int(settings_pack::write_cache_line_size, 256);
 		set.set_bool(settings_pack::low_prio_disk, false);

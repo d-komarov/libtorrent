@@ -74,6 +74,8 @@ namespace libtorrent
 	// returns a settings_pack with every setting set to its default value
 	TORRENT_EXPORT settings_pack default_settings();
 
+	TORRENT_EXPORT void enable_disk_cache(settings_pack& set, bool f);
+
 #ifndef TORRENT_NO_DEPRECATE
 	struct session_settings;
 	TORRENT_DEPRECATED
