@@ -1027,7 +1027,7 @@ done:
 		ret += "'";
 	}
 
-}
+	}
 
 	std::string print_entry(bdecode_node const& e
 		, bool single_line, int indent)
