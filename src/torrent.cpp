@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2003-2016, Arvid Norberg
+Copyright (c) 2003-2018, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -114,6 +114,26 @@ using boost::tuples::make_tuple;
 namespace libtorrent
 {
 	namespace {
+
+	bool is_downloading_state(int st)
+	{
+		switch (st)
+		{
+			case torrent_status::checking_files:
+			case torrent_status::allocating:
+			case torrent_status::checking_resume_data:
+				return false;
+			case torrent_status::downloading_metadata:
+			case torrent_status::downloading:
+			case torrent_status::finished:
+			case torrent_status::seeding:
+				return true;
+			default:
+				// unexpected state
+				TORRENT_ASSERT_VAL(false, st);
+				return false;
+		}
+	}
 
 	int root2(int x)
 	{
@@ -247,7 +267,7 @@ namespace libtorrent
 		, m_files_checked(false)
 		, m_storage_mode(p.storage_mode)
 		, m_announcing(false)
-		, m_waiting_tracker(false)
+		, m_waiting_tracker(0)
 		, m_active_time(0)
 		, m_last_working_tracker(-1)
 		, m_finished_time(0)
@@ -2973,7 +2993,8 @@ namespace {
 #endif
 		boost::shared_ptr<torrent> t = p.lock();
 		if (!t) return;
-		t->m_waiting_tracker = false;
+		TORRENT_ASSERT(t->m_waiting_tracker > 0);
+		--t->m_waiting_tracker;
 
 		if (e) return;
 		t->on_tracker_announce();
@@ -3203,8 +3224,7 @@ namespace {
 		// exclude redundant bytes if we should
 		if (!settings().get_bool(settings_pack::report_true_downloaded))
 			req.downloaded -= m_total_redundant_bytes;
-		if (settings().get_bool(settings_pack::report_redundant_bytes))
-			req.redundant = m_total_redundant_bytes;
+		req.redundant = m_total_redundant_bytes;
 		if (req.downloaded < 0) req.downloaded = 0;
 
 		req.event = e;
@@ -3225,7 +3245,7 @@ namespace {
 		req.num_want = (req.event == tracker_request::stopped)
 			? 0 : settings().get_int(settings_pack::num_want);
 
-		time_point now = aux::time_now();
+		time_point const now = aux::time_now();
 
 		// the tier is kept as INT_MAX until we find the first
 		// tracker that works, then it's set to that tracker's
@@ -4368,23 +4388,26 @@ namespace {
 
 		remove_time_critical_piece(index, true);
 
-		if (is_finished()
-			&& m_state != torrent_status::finished
-			&& m_state != torrent_status::seeding)
+		if (is_downloading_state(m_state))
 		{
-			// torrent finished
-			// i.e. all the pieces we're interested in have
-			// been downloaded. Release the files (they will open
-			// in read only mode if needed)
-			finished();
-			// if we just became a seed, picker is now invalid, since it
-			// is deallocated by the torrent once it starts seeding
+			if (is_finished()
+				&& m_state != torrent_status::finished
+				&& m_state != torrent_status::seeding)
+			{
+				// torrent finished
+				// i.e. all the pieces we're interested in have
+				// been downloaded. Release the files (they will open
+				// in read only mode if needed)
+				finished();
+				// if we just became a seed, picker is now invalid, since it
+				// is deallocated by the torrent once it starts seeding
+			}
+
+			m_last_download = m_ses.session_time();
+
+			if (m_share_mode)
+				recalc_share_mode();
 		}
-
-		m_last_download = m_ses.session_time();
-
-		if (m_share_mode)
-			recalc_share_mode();
 	}
 
 	// this is called when the piece hash is checked as correct. Note
@@ -4501,9 +4524,6 @@ namespace {
 		TORRENT_ASSERT(index < m_torrent_file->num_pieces());
 
 		inc_stats_counter(counters::num_piece_failed);
-
-		if (m_ses.alerts().should_post<hash_failed_alert>())
-			m_ses.alerts().emplace_alert<hash_failed_alert>(get_handle(), index);
 
 		std::vector<int>::iterator it = std::lower_bound(m_predictive_pieces.begin()
 			, m_predictive_pieces.end(), index);
@@ -4704,6 +4724,9 @@ namespace {
 		// unlock the piece and restore it, as if no block was
 		// ever downloaded for it.
 		m_picker->restore_piece(j->piece);
+
+		if (m_ses.alerts().should_post<hash_failed_alert>())
+			m_ses.alerts().emplace_alert<hash_failed_alert>(get_handle(), j->piece);
 
 		// we have to let the piece_picker know that
 		// this piece failed the check as it can restore it
@@ -5793,6 +5816,15 @@ namespace {
 			// invalidate the iterator
 			++i;
 			p->update_interest();
+		}
+
+		if (!is_downloading_state(m_state))
+		{
+#ifndef TORRENT_DISABLE_LOGGING
+			debug_log("*** UPDATE_PEER_INTEREST [ skipping, state: %d ]"
+				, int(m_state));
+#endif
+			return;
 		}
 
 #ifndef TORRENT_DISABLE_LOGGING
@@ -8108,8 +8140,7 @@ namespace {
 			return false;
 		}
 
-		if ((m_state == torrent_status::checking_files
-			|| m_state == torrent_status::checking_resume_data)
+		if (!is_downloading_state(m_state)
 			&& valid_metadata())
 		{
 			p->disconnect(errors::torrent_not_ready, op_bittorrent);
@@ -8646,20 +8677,9 @@ namespace {
 		// to be in downloading state (which it will be set to shortly)
 //		INVARIANT_CHECK;
 
-		// workaround for torrent getting stuck in `downloading` state
-		if (!are_files_checked())
-			set_state(torrent_status::checking_files);
-
-		if (m_state == torrent_status::checking_resume_data
-			|| m_state == torrent_status::checking_files
-			|| m_state == torrent_status::allocating)
-		{
-#ifndef TORRENT_DISABLE_LOGGING
-			debug_log("*** RESUME_DOWNLOAD [ skipping, state: %d ]"
-				, int(m_state));
-#endif
-			return;
-		}
+		TORRENT_ASSERT(m_state != torrent_status::checking_resume_data
+			&& m_state != torrent_status::checking_files
+			&& m_state != torrent_status::allocating);
 
 		// we're downloading now, which means we're no longer in seed mode
 		if (m_seed_mode)
@@ -10210,7 +10230,7 @@ namespace {
 			}
 			else
 			{
-				time_point next_tracker_announce = (std::max)(i->next_announce, i->min_announce);
+				time_point const next_tracker_announce = std::max(i->next_announce, i->min_announce);
 				if (next_tracker_announce < next_announce
 					&& (!found_working || i->is_working()))
 					next_announce = next_tracker_announce;
@@ -10234,7 +10254,7 @@ namespace {
 		// if m_waiting_tracker is false, expires_at() is undefined
 		if (m_waiting_tracker && m_tracker_timer.expires_at() == next_announce) return;
 
-		m_waiting_tracker = true;
+		++m_waiting_tracker;
 		error_code ec;
 		boost::weak_ptr<torrent> self(shared_from_this());
 
@@ -11947,29 +11967,6 @@ namespace {
 	void torrent::new_external_ip()
 	{
 		if (m_peer_list) m_peer_list->clear_peer_prio();
-	}
-
-	namespace
-	{
-		bool is_downloading_state(int st)
-		{
-			switch (st)
-			{
-				case torrent_status::checking_files:
-				case torrent_status::allocating:
-				case torrent_status::checking_resume_data:
-					return false;
-				case torrent_status::downloading_metadata:
-				case torrent_status::downloading:
-				case torrent_status::finished:
-				case torrent_status::seeding:
-					return true;
-				default:
-					// unexpected state
-					TORRENT_ASSERT_VAL(false, st);
-					return false;
-			}
-		}
 	}
 
 	void torrent::stop_when_ready(bool b)
