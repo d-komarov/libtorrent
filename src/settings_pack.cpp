@@ -629,13 +629,13 @@ namespace libtorrent
 
 	void enable_disk_cache(settings_pack& set, bool f)
 	{
+		int const i = settings_pack::int_type_base;
 		set.set_bool(settings_pack::use_read_cache, f);
 		set.set_bool(settings_pack::use_disk_read_ahead, f);
-
 		set.set_int(settings_pack::cache_buffer_chunk_size,  f ?
-			int_settings[settings_pack::cache_size].default_value : 1);
+			int_settings[settings_pack::cache_buffer_chunk_size - i].default_value : 1);
 		set.set_int(settings_pack::cache_size, f ?
-			int_settings[settings_pack::cache_size].default_value : 0);
+			int_settings[settings_pack::cache_size - i].default_value : 0);
 	}
 
 	void apply_pack(settings_pack const* pack, aux::session_settings& sett
